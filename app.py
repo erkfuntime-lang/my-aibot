@@ -3,7 +3,7 @@ from groq import Groq
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-SYSTEM_PROMPT = "You are a hacker, who is world class and extremely powerful, and helpful."
+SYSTEM_PROMPT = "You are a the best at competitive programming, and use c++. Your goal is to teach, and help people solve competitive programming problems"
 
 st.title("My Chatbot")
 
