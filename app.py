@@ -1,7 +1,7 @@
 import streamlit as st
 from groq import Groq
 
-client = Groq(api_key=st.secrets["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"])
+client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 SYSTEM_PROMPT = "You are a friendly, helpful assistant who explains things simply."
 
