@@ -39,23 +39,50 @@ LANGUAGE_MAP = {
     "go": "go",
 }
 
+@st.cache_data(ttl=3600)
+def get_piston_runtimes():
+    try:
+        resp = requests.get("https://emkc.org/api/v2/piston/runtimes", timeout=10)
+        return resp.json()
+    except Exception:
+        return []
+
 def run_code_with_piston(language, code):
+    runtimes = get_piston_runtimes()
+    version = None
+    for rt in runtimes:
+        if rt["language"] == language or language in rt.get("aliases", []):
+            version = rt["version"]
+            break
+
+    if not version:
+        return f"'{language}' isn't available on the code runner right now."
+
     try:
         resp = requests.post(
             "https://emkc.org/api/v2/piston/execute",
             json={
                 "language": language,
-                "version": "*",
+                "version": version,
                 "files": [{"content": code}]
             },
             timeout=15
         )
         result = resp.json()
-        output = result.get("run", {}).get("output", "No output")
-        return output
+
+        if "run" not in result:
+            # Piston returned an error instead of run results — show it plainly
+            return f"Error from code runner: {result}"
+
+        run = result["run"]
+        stdout = run.get("stdout", "")
+        stderr = run.get("stderr", "")
+        combined = stdout
+        if stderr:
+            combined += f"\n--- stderr ---\n{stderr}"
+        return combined if combined.strip() else "(Code ran successfully with no output)"
     except Exception as e:
         return f"Error running code: {e}"
-
 def render_message_with_code_blocks(content, key_prefix):
     # Split the message into text and code blocks
     pattern = r"```(\w+)?\n(.*?)```"
