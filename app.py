@@ -3,9 +3,18 @@ from groq import Groq
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-SYSTEM_PROMPT = "You are a the best at competitive programming, and use c++. Your goal is to teach, and help people solve competitive programming problems"
-
 st.title("My Chatbot")
+
+# Sidebar lets you edit the personality/instructions without touching code
+with st.sidebar:
+    st.header("Settings")
+    system_prompt = st.text_area(
+        "System prompt (the bot's instructions/personality)",
+        value="You are a friendly, helpful assistant who explains things simply.",
+        height=200
+    )
+    if st.button("Clear chat"):
+        st.session_state.messages = []
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -21,7 +30,7 @@ if user_input:
     with st.chat_message("user"):
         st.write(user_input)
 
-    api_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + st.session_state.messages
+    api_messages = [{"role": "system", "content": system_prompt}] + st.session_state.messages
 
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
