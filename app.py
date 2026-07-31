@@ -1,9 +1,9 @@
 import streamlit as st
 from groq import Groq
-import requests
-import re
+from supabase import create_client
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+db = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 st.title("My Chatbot")
 
@@ -12,93 +12,52 @@ PERSONAS = {
     "Math Tutor": "You are a patient, encouraging math tutor for beginners. Explain step by step.",
     "D&D Game Master": "You are a creative Dungeons & Dragons game master narrating an adventure.",
     "Code Reviewer": "You are a senior software engineer giving direct, constructive code feedback.",
-    "CP Expert": "You are a professional at Competitive Programming, in c++. You are the best, and always make sure you clearly explain your code when asked",
     "Custom": ""
 }
-
-with st.sidebar:
-    st.header("Settings")
-    persona_choice = st.selectbox("Choose a persona", list(PERSONAS.keys()))
-    if persona_choice == "Custom":
-        system_prompt = st.text_area("Write your own system prompt", height=200)
-    else:
-        system_prompt = st.text_area("System prompt (editable)", value=PERSONAS[persona_choice], height=200)
-    if st.button("Clear chat"):
-        st.session_state.messages = []
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Maps Piston's language names to what markdown code fences usually say
-LANGUAGE_MAP = {
-    "python": "python", "py": "python",
-    "javascript": "javascript", "js": "javascript",
-    "java": "java",
-    "c": "c", "cpp": "cpp", "c++": "cpp",
-    "bash": "bash", "sh": "bash",
-    "ruby": "ruby",
-    "go": "go",
-}
+with st.sidebar:
+    st.header("Settings")
 
-def run_code_with_piston(language, code):
-    try:
-        resp = requests.post(
-            "https://emkc.org/api/v2/piston/execute",
-            json={
-                "language": language,
-                "version": "*",
-                "files": [{"content": code}]
-            },
-            timeout=15
-        )
-        result = resp.json()
-        output = result.get("run", {}).get("output", "No output")
-        return output
-    except Exception as e:
-        return f"Error running code: {e}"
+    persona_choice = st.selectbox("Choose a persona", list(PERSONAS.keys()))
+    if persona_choice == "Custom":
+        system_prompt = st.text_area("Write your own system prompt", height=150)
+    else:
+        system_prompt = st.text_area("System prompt (editable)", value=PERSONAS[persona_choice], height=150)
 
-def render_message_with_code_blocks(content, key_prefix):
-    # Split the message into text and code blocks
-    pattern = r"```(\w+)?\n(.*?)```"
-    parts = re.split(pattern, content, flags=re.DOTALL)
-    # parts alternates: [text, lang, code, text, lang, code, ...]
-    i = 0
-    block_index = 0
-    while i < len(parts):
-        text_part = parts[i]
-        if text_part.strip():
-            st.markdown(text_part)
-        if i + 2 < len(parts):
-            lang = (parts[i+1] or "text").lower()
-            code = parts[i+2]
-            st.code(code, language=lang)
+    st.divider()
+    st.subheader("Save current chat")
+    save_title = st.text_input("Chat title")
+    if st.button("Save chat") and save_title and st.session_state.messages:
+        db.table("chats").insert({
+            "title": save_title,
+            "persona": system_prompt,
+            "messages": st.session_state.messages
+        }).execute()
+        st.success("Saved!")
 
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                st.download_button(
-                    "Download file",
-                    data=code,
-                    file_name=f"snippet_{block_index}.{ 'py' if lang=='python' else 'txt'}",
-                    key=f"{key_prefix}_dl_{block_index}"
-                )
-            with col2:
-                piston_lang = LANGUAGE_MAP.get(lang)
-                if piston_lang:
-                    if st.button("Run this code", key=f"{key_prefix}_run_{block_index}"):
-                        with st.spinner("Running..."):
-                            output = run_code_with_piston(piston_lang, code)
-                        st.text_area("Output", output, height=150, key=f"{key_prefix}_out_{block_index}")
-                else:
-                    st.caption("(Run not supported for this language)")
-            block_index += 1
-        i += 3
+    st.divider()
+    st.subheader("Load a saved chat")
+    saved = db.table("chats").select("id, title, created_at").order("created_at", desc=True).execute()
+    saved_options = {f"{row['title']} ({row['created_at'][:10]})": row["id"] for row in saved.data}
 
-for idx, msg in enumerate(st.session_state.messages):
+    if saved_options:
+        chosen = st.selectbox("Pick a chat", list(saved_options.keys()))
+        if st.button("Load chat"):
+            chat_id = saved_options[chosen]
+            full = db.table("chats").select("*").eq("id", chat_id).single().execute()
+            st.session_state.messages = full.data["messages"]
+            system_prompt = full.data["persona"]
+            st.rerun()
+
+    if st.button("Clear current chat"):
+        st.session_state.messages = []
+
+for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
-        if msg["role"] == "assistant":
-            render_message_with_code_blocks(msg["content"], key_prefix=f"msg{idx}")
-        else:
-            st.write(msg["content"])
+        st.write(msg["content"])
 
 user_input = st.chat_input("Say something...")
 
@@ -117,4 +76,4 @@ if user_input:
 
     st.session_state.messages.append({"role": "assistant", "content": reply})
     with st.chat_message("assistant"):
-        render_message_with_code_blocks(reply, key_prefix=f"msg{len(st.session_state.messages)}")
+        st.write(reply)
