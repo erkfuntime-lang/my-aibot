@@ -2,3 +2,5 @@ streamlit
 groq
 requests
 supabase
+pypdf
+scikit-learn
