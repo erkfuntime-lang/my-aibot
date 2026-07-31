@@ -34,7 +34,8 @@ PERSONAS = {
 for key, default in [
     ("messages", []), ("current_artifact", None),
     ("doc_chunks", None), ("doc_vectorizer", None),
-    ("doc_matrix", None), ("doc_name", None)
+    ("doc_matrix", None), ("doc_name", None),
+    ("artifact_visible", True) 
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -176,18 +177,37 @@ with chat_col:
 
         if artifact:
             st.session_state.current_artifact = artifact
+            st.session_state.artifact_visible = True
 
         st.rerun()
 
 with artifact_col:
-    st.subheader("Artifact Preview")
     art = st.session_state.current_artifact
-    if art:
-        st.caption(art["title"])
+
+    if art and st.session_state.artifact_visible:
+        header_col, close_col = st.columns([5, 1])
+        with header_col:
+            st.subheader("Artifact Preview")
+            st.caption(art["title"])
+        with close_col:
+            st.write("")  # small vertical spacer to align button
+            if st.button("✕", help="Close preview"):
+                st.session_state.artifact_visible = False
+                st.rerun()
+
         tab1, tab2 = st.tabs(["Preview", "Code"])
         with tab1:
             st.components.v1.html(art["code"], height=500, scrolling=True)
         with tab2:
             st.code(art["code"], language="html")
+
+    elif art and not st.session_state.artifact_visible:
+        st.subheader("Artifact Preview")
+        st.info(f"Preview closed: **{art['title']}**")
+        if st.button("Reopen preview"):
+            st.session_state.artifact_visible = True
+            st.rerun()
+
     else:
+        st.subheader("Artifact Preview")
         st.info("Ask the assistant to build something visual, and it'll show up here.")
