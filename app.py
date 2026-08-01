@@ -54,13 +54,27 @@ def extract_artifact(text):
     clean_text = text[:match.start()] + text[match.end():]
     return clean_text.strip(), {"type": art_type, "title": title, "code": code.strip()}
 
-def pollinations_url(prompt, width=1024, height=1024):
-    encoded = urllib.parse.quote(prompt)
-    key = st.secrets.get("POLLINATIONS_KEY", "")
-    url = f"https://gen.pollinations.ai/image/{encoded}?width={width}&height={height}&model=flux"
-    if key:
-        url += f"&key={key}"
-    return url
+import requests
+
+def generate_image_cloudflare(prompt):
+    account_id = st.secrets["CLOUDFLARE_ACCOUNT_ID"]
+    token = st.secrets["CLOUDFLARE_API_TOKEN"]
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/black-forest-labs/flux-1-schnell"
+
+    try:
+        response = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json={"prompt": prompt},
+            timeout=60
+        )
+    except Exception as e:
+        return None, f"Request failed: {e}"
+
+    if response.status_code == 200:
+        return response.content, None
+    else:
+        return None, f"Status {response.status_code}: {response.text[:300]}"
 
 def chunk_text(text, chunk_size=800, overlap=100):
     chunks = []
@@ -202,10 +216,13 @@ with artifact_col:
                 st.session_state.artifact_visible = False
                 st.rerun()
 
-        if art["type"] == "image":
-            url = pollinations_url(art["code"])
-            st.code(url, language=None)   
-            st.image(url, caption=art["title"], use_container_width=True)
+      if art["type"] == "image":
+            with st.spinner("Generating image..."):
+               image_bytes, error = generate_image_cloudflare(art["code"])
+            if image_bytes:
+                st.image(image_bytes, caption=art["title"], use_container_width=True)
+            else:
+                st.error(f"Image generation failed: {error}")
             st.caption(f"Prompt used: {art['code']}")
         else:
             tab1, tab2 = st.tabs(["Preview", "Code"])
