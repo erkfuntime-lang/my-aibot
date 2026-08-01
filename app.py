@@ -37,6 +37,7 @@ a short prompt describing the transformation to apply, written for an image edit
 
 If the user attaches an image and just asks you to describe or answer questions about it, respond normally in plain text with no artifact tag.
 """
+
 PERSONAS = {
     "Friendly Helper": "You are a friendly, helpful assistant who explains things simply.",
     "Math Tutor": "You are a patient, encouraging math tutor for beginners. Explain step by step.",
@@ -50,10 +51,11 @@ for key, default in [
     ("doc_chunks", None), ("doc_vectorizer", None),
     ("doc_matrix", None), ("doc_name", None),
     ("artifact_visible", True), ("pending_image", None),
-    ("last_attached_image_bytes", None) 
+    ("last_attached_image_bytes", None)
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
 
 def extract_artifact(text):
     match = re.search(r'<artifact type="(.*?)" title="(.*?)">(.*?)</artifact>', text, re.DOTALL)
@@ -62,6 +64,7 @@ def extract_artifact(text):
     art_type, title, code = match.groups()
     clean_text = text[:match.start()] + text[match.end():]
     return clean_text.strip(), {"type": art_type, "title": title, "code": code.strip()}
+
 
 def generate_image_cloudflare(prompt):
     account_id = st.secrets["CLOUDFLARE_ACCOUNT_ID"]
@@ -82,7 +85,9 @@ def generate_image_cloudflare(prompt):
         return image_bytes, None
     except Exception as e:
         return None, f"Unexpected response format: {response.text[:300]}"
-def edit_image_cloudflare(image_bytes, prompt, strength = 0.7):
+
+
+def edit_image_cloudflare(image_bytes, prompt, strength=0.7):
     account_id = st.secrets["CLOUDFLARE_ACCOUNT_ID"]
     token = st.secrets["CLOUDFLARE_API_TOKEN"]
     url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/runwayml/stable-diffusion-v1-5-img2img"
@@ -93,8 +98,8 @@ def edit_image_cloudflare(image_bytes, prompt, strength = 0.7):
         response = requests.post(
             url,
             headers={"Authorization": f"Bearer {token}"},
-            json = {"prompt": prompt, "image_b64": b64_input, "strength": strength},
-            timeout = 60
+            json={"prompt": prompt, "image_b64": b64_input, "strength": strength},
+            timeout=60
         )
     except Exception as e:
         return None, f"Request failed: {e}"
@@ -109,6 +114,8 @@ def edit_image_cloudflare(image_bytes, prompt, strength = 0.7):
         return base64.b64decode(data["result"]["image"]), None
     except Exception:
         return None, f"Unexpected response: {response.text[:300]}"
+
+
 def chunk_text(text, chunk_size=800, overlap=100):
     chunks = []
     start = 0
@@ -116,6 +123,7 @@ def chunk_text(text, chunk_size=800, overlap=100):
         chunks.append(text[start:start + chunk_size])
         start += chunk_size - overlap
     return [c for c in chunks if c.strip()]
+
 
 def process_uploaded_file(file):
     if file.name.endswith(".pdf"):
@@ -131,6 +139,7 @@ def process_uploaded_file(file):
     st.session_state.doc_matrix = matrix
     st.session_state.doc_name = file.name
 
+
 def get_relevant_context(query, top_k=3):
     if st.session_state.doc_chunks is None:
         return ""
@@ -141,6 +150,7 @@ def get_relevant_context(query, top_k=3):
     if not relevant:
         return ""
     return "\n\nRelevant excerpts from the uploaded document:\n" + "\n---\n".join(relevant)
+
 
 # --- Sidebar ---
 with st.sidebar:
@@ -154,6 +164,8 @@ with st.sidebar:
     st.divider()
     st.subheader("Response mode")
     reasoning_on = st.toggle("Deep reasoning (slower, better for math/code)", value=False)
+
+    st.divider()
     st.subheader("Upload a document")
     uploaded_file = st.file_uploader("PDF or text file", type=["pdf", "txt"])
     if uploaded_file and uploaded_file.name != st.session_state.doc_name:
@@ -173,11 +185,18 @@ with st.sidebar:
     st.subheader("Save current chat")
     save_title = st.text_input("Chat title")
     if st.button("Save chat") and save_title and st.session_state.messages:
+        artifact_to_save = None
+        if st.session_state.current_artifact:
+            # strip out raw image bytes before saving to Supabase (jsonb can't hold binary)
+            artifact_to_save = {
+                k: v for k, v in st.session_state.current_artifact.items()
+                if k not in ("image_bytes", "error")
+            }
         db.table("chats").insert({
             "title": save_title,
             "persona": system_prompt,
             "messages": st.session_state.messages,
-            "artifact": st.session_state.current_artifact
+            "artifact": artifact_to_save
         }).execute()
         st.success("Saved!")
 
@@ -265,13 +284,15 @@ with chat_col:
                 messages=api_messages,
                 stream=True,
                 reasoning_format="hidden",
-                reasoning_effort = "default" if reasoning_on else "none"
+                reasoning_effort="default" if reasoning_on else "none"
             )
+
             def text_generator():
                 for chunk in stream:
                     delta = chunk.choices[0].delta.content
                     if delta:
                         yield delta
+
             full_reply = st.write_stream(text_generator)
 
         clean_reply, artifact = extract_artifact(full_reply)
@@ -297,28 +318,39 @@ if show_artifact_panel:
                 st.rerun()
 
         if art["type"] == "image":
-            with st.spinner("Generating image..."):
-                image_bytes, error = generate_image_cloudflare(art["code"])
-            if image_bytes:
-                st.image(image_bytes, caption=art["title"], use_container_width=True)
-                st.download_button("Download image", image_bytes, file_name=f"{art['title']}.png", mime="image/png")
+            if "image_bytes" not in art:
+                with st.spinner("Generating image..."):
+                    image_bytes, error = generate_image_cloudflare(art["code"])
+                art["image_bytes"] = image_bytes
+                art["error"] = error
+                st.session_state.current_artifact = art
+
+            if art.get("image_bytes"):
+                st.image(art["image_bytes"], caption=art["title"], use_container_width=True)
+                st.download_button("Download image", art["image_bytes"], file_name=f"{art['title']}.png", mime="image/png")
             else:
-                st.error(f"Image generation failed: {error}")
+                st.error(f"Image generation failed: {art.get('error')}")
             st.caption(f"Prompt used: {art['code']}")
 
         elif art["type"] == "edit_image":
-            if st.session_state.last_attached_image_bytes:
-                with st.spinner("Editing image..."):
-                    image_bytes, error = edit_image_cloudflare(
-                        st.session_state.last_attached_image_bytes, art["code"]
-                    )
-                if image_bytes:
-                    st.image(image_bytes, caption=art["title"], use_container_width=True)
-                    st.download_button("Download image", image_bytes, file_name=f"{art['title']}.png", mime="image/png")
+            if "image_bytes" not in art:
+                if st.session_state.last_attached_image_bytes:
+                    with st.spinner("Editing image..."):
+                        image_bytes, error = edit_image_cloudflare(
+                            st.session_state.last_attached_image_bytes, art["code"]
+                        )
+                    art["image_bytes"] = image_bytes
+                    art["error"] = error
                 else:
-                    st.error(f"Image editing failed: {error}")
+                    art["image_bytes"] = None
+                    art["error"] = "No attached image found to edit."
+                st.session_state.current_artifact = art
+
+            if art.get("image_bytes"):
+                st.image(art["image_bytes"], caption=art["title"], use_container_width=True)
+                st.download_button("Download image", art["image_bytes"], file_name=f"{art['title']}.png", mime="image/png")
             else:
-                st.error("No attached image found to edit.")
+                st.error(art.get("error"))
             st.caption(f"Edit applied: {art['code']}")
 
         elif art["type"] == "html":
@@ -328,6 +360,7 @@ if show_artifact_panel:
             with tab2:
                 st.code(art["code"], language="html")
             st.download_button("Download code", art["code"], file_name=f"{art['title']}.html", mime="text/html")
+
 elif st.session_state.current_artifact and not st.session_state.artifact_visible:
     st.info(f"Preview closed: **{st.session_state.current_artifact['title']}**")
     if st.button("Reopen preview"):
