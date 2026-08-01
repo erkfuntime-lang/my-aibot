@@ -56,7 +56,7 @@ def extract_artifact(text):
 
 def pollinations_url(prompt, width=1024, height=1024):
     encoded = urllib.parse.quote(prompt)
-    return f"https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}&nologo=true"
+    return f"https://gen.pollinations.ai/image/{encoded}?width={width}&height={height}"
 
 def chunk_text(text, chunk_size=800, overlap=100):
     chunks = []
