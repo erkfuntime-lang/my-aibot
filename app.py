@@ -51,7 +51,7 @@ for key, default in [
     ("doc_chunks", None), ("doc_vectorizer", None),
     ("doc_matrix", None), ("doc_name", None),
     ("artifact_visible", True), ("pending_image", None),
-    ("last_attached_image_bytes", None)
+    ("last_attached_image_bytes", None), ("suggested_title", "")
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -152,6 +152,25 @@ def get_relevant_context(query, top_k=3):
     return "\n\nRelevant excerpts from the uploaded document:\n" + "\n---\n".join(relevant)
 
 
+def suggest_chat_title(messages):
+    if not messages:
+        return "Untitled chat"
+    convo_snippet = "\n".join(
+        f"{m['role']}: {m['content'] if isinstance(m['content'], str) else '[message with image]'}"
+        for m in messages[:6]
+    )
+    response = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[
+            {"role": "system", "content": "Suggest a short, plain 3-6 word title summarizing this conversation. Reply with ONLY the title, no quotes, no punctuation at the end."},
+            {"role": "user", "content": convo_snippet}
+        ],
+        reasoning_format="hidden",
+        reasoning_effort="none"
+    )
+    return response.choices[0].message.content.strip()
+
+
 # --- Sidebar ---
 with st.sidebar:
     st.header("Settings")
@@ -183,7 +202,17 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Save current chat")
-    save_title = st.text_input("Chat title")
+
+    title_col, suggest_col = st.columns([3, 1])
+    with title_col:
+        save_title = st.text_input("Chat title", value=st.session_state.suggested_title, key="save_title_input")
+    with suggest_col:
+        st.write("")
+        if st.button("✨", help="Suggest a title") and st.session_state.messages:
+            with st.spinner("Thinking..."):
+                st.session_state.suggested_title = suggest_chat_title(st.session_state.messages)
+            st.rerun()
+
     if st.button("Save chat") and save_title and st.session_state.messages:
         artifact_to_save = None
         if st.session_state.current_artifact:
@@ -199,6 +228,7 @@ with st.sidebar:
             "artifact": artifact_to_save
         }).execute()
         st.success("Saved!")
+        st.session_state.suggested_title = ""
 
     st.divider()
     st.subheader("Load a saved chat")
@@ -217,6 +247,7 @@ with st.sidebar:
     if st.button("Clear current chat"):
         st.session_state.messages = []
         st.session_state.current_artifact = None
+        st.session_state.suggested_title = ""
 
 # --- Full-width toggle: 2 columns only if an artifact is showing ---
 show_artifact_panel = st.session_state.current_artifact and st.session_state.artifact_visible
@@ -358,7 +389,11 @@ if show_artifact_panel:
             with tab1:
                 st.components.v1.html(art["code"], height=500, scrolling=True)
             with tab2:
-                st.code(art["code"], language="html")
+                edited_code = st.text_area("Edit the code", value=art["code"], height=400, key=f"editor_{id(art)}")
+                if st.button("Update preview"):
+                    art["code"] = edited_code
+                    st.session_state.current_artifact = art
+                    st.rerun()
             st.download_button("Download code", art["code"], file_name=f"{art['title']}.html", mime="text/html")
 
 elif st.session_state.current_artifact and not st.session_state.artifact_visible:
