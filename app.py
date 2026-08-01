@@ -16,24 +16,27 @@ st.set_page_config(layout="wide")
 
 MODEL_NAME = "qwen/qwen3.6-27b"  # multimodal: handles text + image understanding
 
-ARTIFACT_INSTRUCTIONS = """
+AARTIFACT_INSTRUCTIONS = """
 When the user asks you to build something visual or interactive (a webpage, a game, a diagram, a small app, an SVG graphic), respond with the code wrapped EXACTLY like this:
 
 <artifact type="html" title="Short title here">
 ...complete, self-contained HTML/CSS/JS code here...
 </artifact>
 
-When the user asks you to generate, draw, create, or make a NEW image, respond with a detailed visual description wrapped EXACTLY like this:
+When the user asks you to generate, draw, or create a NEW image (no image attached, or not asking to change an existing one), respond with:
 
 <artifact type="image" title="Short title here">
-a detailed, vivid description of the image to generate, written for an image AI
+a detailed, vivid description of the image to generate
 </artifact>
 
-If the user has attached an image and asks you to describe, analyze, or answer questions about it, just answer normally in plain text — do NOT use an artifact tag for that.
+When the user has attached an image AND asks you to edit, modify, transform, or change it (e.g. "make this snowy", "turn this into a cartoon"), respond with:
 
-If the user attaches an image and asks for an "edited" or "modified" version, generate a new image artifact whose description captures the original image's content PLUS the requested changes, since you can only generate new images, not edit pixels directly. Mention this limitation briefly in your text reply.
+<artifact type="edit_image" title="Short title here">
+a short prompt describing the transformation to apply, written for an image editing AI (e.g. "add falling snow, winter atmosphere")
+</artifact>
+
+If the user attaches an image and just asks you to describe or answer questions about it, respond normally in plain text with no artifact tag.
 """
-
 PERSONAS = {
     "Friendly Helper": "You are a friendly, helpful assistant who explains things simply.",
     "Math Tutor": "You are a patient, encouraging math tutor for beginners. Explain step by step.",
@@ -46,7 +49,8 @@ for key, default in [
     ("messages", []), ("current_artifact", None),
     ("doc_chunks", None), ("doc_vectorizer", None),
     ("doc_matrix", None), ("doc_name", None),
-    ("artifact_visible", True), ("pending_image", None)
+    ("artifact_visible", True), ("pending_image", None),
+    ("last_attached_image_bytes", None) 
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -78,7 +82,33 @@ def generate_image_cloudflare(prompt):
         return image_bytes, None
     except Exception as e:
         return None, f"Unexpected response format: {response.text[:300]}"
+def edit_image_cloudflare(image_bytes, prompt, strength = 0.7):
+    account_id = st.secrets["CLOUDFLARE_ACCOUNT_ID"]
+    token = st.secrets["CLOUDFLARE_API_TOKEN"]
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/runwayml/stable-diffusion-v1-5-img2img"
 
+    b64_input = base64.b64encode(image_bytes).decode("utf-8")
+
+    try:
+        response = requests.post(
+            url,
+            headers={"Authorisation": f"Bearer {token}"},
+            json = {"prompt": prompt, "image_b64": b64_input, "strength": strength},
+            timeout = 60
+        )
+    except Exception as e:
+        return None, f"Request failed: {e}"
+
+    if response.status_code != 200:
+        return None, f"Status {response.status_code}: {response.text[:300]}"
+    content_type = response.headers.get("content-type", "")
+    if "image" in content_type:
+        return response.content, None
+    try:
+        data = response.json()
+        return base64.b64decode(data["result"]["image"]), None
+    except Exception:
+        return None, f"Unexpected response: {response.text[:300]}"
 def chunk_text(text, chunk_size=800, overlap=100):
     chunks = []
     start = 0
@@ -122,6 +152,8 @@ with st.sidebar:
         system_prompt = st.text_area("System prompt (editable)", value=PERSONAS[persona_choice], height=150)
 
     st.divider()
+    st.subheader("Response mode")
+    reasoning_on = st.toggle("Deep reasoning (slower, better for math/code)", value=False)
     st.subheader("Upload a document")
     uploaded_file = st.file_uploader("PDF or text file", type=["pdf", "txt"])
     if uploaded_file and uploaded_file.name != st.session_state.doc_name:
@@ -142,8 +174,10 @@ with st.sidebar:
     save_title = st.text_input("Chat title")
     if st.button("Save chat") and save_title and st.session_state.messages:
         db.table("chats").insert({
-            "title": save_title, "persona": system_prompt,
-            "messages": st.session_state.messages
+            "title": save_title,
+            "persona": system_prompt,
+            "messages": st.session_state.messages,
+            "artifact": st.session_state.current_artifact
         }).execute()
         st.success("Saved!")
 
@@ -157,7 +191,8 @@ with st.sidebar:
             chat_id = saved_options[chosen]
             full = db.table("chats").select("*").eq("id", chat_id).single().execute()
             st.session_state.messages = full.data["messages"]
-            st.session_state.current_artifact = None
+            st.session_state.current_artifact = full.data.get("artifact")
+            st.session_state.artifact_visible = bool(full.data.get("artifact"))
             st.rerun()
 
     if st.button("Clear current chat"):
@@ -198,6 +233,7 @@ with chat_col:
     if user_input:
         if st.session_state.pending_image:
             img_bytes = st.session_state.pending_image.getvalue()
+            st.session_state.last_attached_image_bytes = img_bytes
             b64 = base64.b64encode(img_bytes).decode("utf-8")
             mime = st.session_state.pending_image.type
             user_content = [
@@ -229,6 +265,7 @@ with chat_col:
                 messages=api_messages,
                 stream=True,
                 reasoning_format="hidden"
+                reasoning_effor = "default" if reasoning_on else "none"
             )
             def text_generator():
                 for chunk in stream:
@@ -267,12 +304,24 @@ if show_artifact_panel:
             else:
                 st.error(f"Image generation failed: {error}")
             st.caption(f"Prompt used: {art['code']}")
-        else:
-            tab1, tab2 = st.tabs(["Preview", "Code"])
-            with tab1:
-                st.components.v1.html(art["code"], height=500, scrolling=True)
-            with tab2:
-                st.code(art["code"], language="html")
+
+        elif art["type"] == "edit_image":
+            if st.session_state.last_attached_image_bytes:
+                with st.spinner("Editing image..."):
+                    image_bytes, error = edit_image_cloudflare(
+                        st.session_state.last_attached_image_bytes, art["code"]
+                    )
+                if image_bytes:
+                    st.image(image_bytes, caption=art["title"], use_container_width=True)
+                else:
+                    st.error(f"Image editing failed: {error}")
+            else:
+                st.error("No attached image found to edit.")
+            st.caption(f"Edit applied: {art['code']}")
+        if art["type"] == "html":
+            st.download_button("Download code", art["code"], file_name=f"{art['title']}.html", mime="text/html")
+        elif art["type"] in ("image", "edit_image") and image_bytes:
+            st.download_button("Download image", image_bytes, file_name=f"{art['title']}.png", mime="image/png")
 
 elif st.session_state.current_artifact and not st.session_state.artifact_visible:
     st.info(f"Preview closed: **{st.session_state.current_artifact['title']}**")
