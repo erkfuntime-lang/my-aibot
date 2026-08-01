@@ -16,7 +16,7 @@ st.set_page_config(layout="wide")
 
 MODEL_NAME = "qwen/qwen3.6-27b"  # multimodal: handles text + image understanding
 
-AARTIFACT_INSTRUCTIONS = """
+ARTIFACT_INSTRUCTIONS = """
 When the user asks you to build something visual or interactive (a webpage, a game, a diagram, a small app, an SVG graphic), respond with the code wrapped EXACTLY like this:
 
 <artifact type="html" title="Short title here">
@@ -92,7 +92,7 @@ def edit_image_cloudflare(image_bytes, prompt, strength = 0.7):
     try:
         response = requests.post(
             url,
-            headers={"Authorisation": f"Bearer {token}"},
+            headers={"Authorization": f"Bearer {token}"},
             json = {"prompt": prompt, "image_b64": b64_input, "strength": strength},
             timeout = 60
         )
