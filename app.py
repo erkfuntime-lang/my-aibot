@@ -264,7 +264,7 @@ with chat_col:
                 model=MODEL_NAME,
                 messages=api_messages,
                 stream=True,
-                reasoning_format="hidden"
+                reasoning_format="hidden",
                 reasoning_effor = "default" if reasoning_on else "none"
             )
             def text_generator():
