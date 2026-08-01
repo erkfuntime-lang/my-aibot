@@ -265,7 +265,7 @@ with chat_col:
                 messages=api_messages,
                 stream=True,
                 reasoning_format="hidden",
-                reasoning_effor = "default" if reasoning_on else "none"
+                reasoning_effort = "default" if reasoning_on else "none"
             )
             def text_generator():
                 for chunk in stream:
