@@ -61,20 +61,18 @@ def generate_image_cloudflare(prompt):
     token = st.secrets["CLOUDFLARE_API_TOKEN"]
     url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/black-forest-labs/flux-1-schnell"
 
-    try:
-        response = requests.post(
-            url,
-            headers={"Authorization": f"Bearer {token}"},
-            json={"prompt": prompt},
-            timeout=60
-        )
-    except Exception as e:
-        return None, f"Request failed: {e}"
+    response = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        json={"prompt": prompt},
+        timeout=60
+    )
 
-    if response.status_code == 200:
-        return response.content, None
-    else:
-        return None, f"Status {response.status_code}: {response.text[:300]}"
+    st.write("Status:", response.status_code)
+    st.write("Content-Type:", response.headers.get("content-type"))
+    st.write("First 300 chars of response:", response.text[:300])
+
+    return None, "debug mode"
 
 def chunk_text(text, chunk_size=800, overlap=100):
     chunks = []
