@@ -227,7 +227,7 @@ with chat_col:
             stream = client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=api_messages,
-                stream=True
+                stream=True,
                 reasoning_format="hidden"
             )
             def text_generator():
