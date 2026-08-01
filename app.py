@@ -301,6 +301,7 @@ if show_artifact_panel:
                 image_bytes, error = generate_image_cloudflare(art["code"])
             if image_bytes:
                 st.image(image_bytes, caption=art["title"], use_container_width=True)
+                st.download_button("Download image", image_bytes, file_name=f"{art['title']}.png", mime="image/png")
             else:
                 st.error(f"Image generation failed: {error}")
             st.caption(f"Prompt used: {art['code']}")
@@ -313,16 +314,20 @@ if show_artifact_panel:
                     )
                 if image_bytes:
                     st.image(image_bytes, caption=art["title"], use_container_width=True)
+                    st.download_button("Download image", image_bytes, file_name=f"{art['title']}.png", mime="image/png")
                 else:
                     st.error(f"Image editing failed: {error}")
             else:
                 st.error("No attached image found to edit.")
             st.caption(f"Edit applied: {art['code']}")
-        if art["type"] == "html":
-            st.download_button("Download code", art["code"], file_name=f"{art['title']}.html", mime="text/html")
-        elif art["type"] in ("image", "edit_image") and image_bytes:
-            st.download_button("Download image", image_bytes, file_name=f"{art['title']}.png", mime="image/png")
 
+        elif art["type"] == "html":
+            tab1, tab2 = st.tabs(["Preview", "Code"])
+            with tab1:
+                st.components.v1.html(art["code"], height=500, scrolling=True)
+            with tab2:
+                st.code(art["code"], language="html")
+            st.download_button("Download code", art["code"], file_name=f"{art['title']}.html", mime="text/html")
 elif st.session_state.current_artifact and not st.session_state.artifact_visible:
     st.info(f"Preview closed: **{st.session_state.current_artifact['title']}**")
     if st.button("Reopen preview"):
