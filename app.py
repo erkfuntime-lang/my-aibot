@@ -56,23 +56,33 @@ def extract_artifact(text):
 
 import requests
 
+import base64
+
 def generate_image_cloudflare(prompt):
     account_id = st.secrets["CLOUDFLARE_ACCOUNT_ID"]
     token = st.secrets["CLOUDFLARE_API_TOKEN"]
     url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/black-forest-labs/flux-1-schnell"
 
-    response = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {token}"},
-        json={"prompt": prompt},
-        timeout=60
-    )
+    try:
+        response = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json={"prompt": prompt},
+            timeout=60
+        )
+    except Exception as e:
+        return None, f"Request failed: {e}"
 
-    st.write("Status:", response.status_code)
-    st.write("Content-Type:", response.headers.get("content-type"))
-    st.write("First 300 chars of response:", response.text[:300])
+    if response.status_code != 200:
+        return None, f"Status {response.status_code}: {response.text[:300]}"
 
-    return None, "debug mode"
+    try:
+        data = response.json()
+        b64_image = data["result"]["image"]
+        image_bytes = base64.b64decode(b64_image)
+        return image_bytes, None
+    except Exception as e:
+        return None, f"Unexpected response format: {response.text[:300]}"
 
 def chunk_text(text, chunk_size=800, overlap=100):
     chunks = []
