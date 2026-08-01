@@ -1,6 +1,7 @@
 import streamlit as st
 import re
-import urllib.parse
+import base64
+import requests
 import numpy as np
 from groq import Groq
 from supabase import create_client
@@ -13,6 +14,8 @@ db = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 st.set_page_config(layout="wide")
 
+MODEL_NAME = "qwen/qwen3.6-27b"  # multimodal: handles text + image understanding
+
 ARTIFACT_INSTRUCTIONS = """
 When the user asks you to build something visual or interactive (a webpage, a game, a diagram, a small app, an SVG graphic), respond with the code wrapped EXACTLY like this:
 
@@ -20,13 +23,15 @@ When the user asks you to build something visual or interactive (a webpage, a ga
 ...complete, self-contained HTML/CSS/JS code here...
 </artifact>
 
-When the user asks you to generate, draw, or create an IMAGE or picture, respond with a detailed visual description wrapped EXACTLY like this instead:
+When the user asks you to generate, draw, create, or make a NEW image, respond with a detailed visual description wrapped EXACTLY like this:
 
 <artifact type="image" title="Short title here">
 a detailed, vivid description of the image to generate, written for an image AI
 </artifact>
 
-Only use these tags when producing something meant to be viewed/run. Use "image" only for actual picture requests, not diagrams made of code.
+If the user has attached an image and asks you to describe, analyze, or answer questions about it, just answer normally in plain text — do NOT use an artifact tag for that.
+
+If the user attaches an image and asks for an "edited" or "modified" version, generate a new image artifact whose description captures the original image's content PLUS the requested changes, since you can only generate new images, not edit pixels directly. Mention this limitation briefly in your text reply.
 """
 
 PERSONAS = {
@@ -41,7 +46,7 @@ for key, default in [
     ("messages", []), ("current_artifact", None),
     ("doc_chunks", None), ("doc_vectorizer", None),
     ("doc_matrix", None), ("doc_name", None),
-    ("artifact_visible", True)
+    ("artifact_visible", True), ("pending_image", None)
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -54,32 +59,22 @@ def extract_artifact(text):
     clean_text = text[:match.start()] + text[match.end():]
     return clean_text.strip(), {"type": art_type, "title": title, "code": code.strip()}
 
-import requests
-
-import base64
-
 def generate_image_cloudflare(prompt):
     account_id = st.secrets["CLOUDFLARE_ACCOUNT_ID"]
     token = st.secrets["CLOUDFLARE_API_TOKEN"]
     url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/black-forest-labs/flux-1-schnell"
-
     try:
         response = requests.post(
-            url,
-            headers={"Authorization": f"Bearer {token}"},
-            json={"prompt": prompt},
-            timeout=60
+            url, headers={"Authorization": f"Bearer {token}"},
+            json={"prompt": prompt}, timeout=60
         )
     except Exception as e:
         return None, f"Request failed: {e}"
-
     if response.status_code != 200:
         return None, f"Status {response.status_code}: {response.text[:300]}"
-
     try:
         data = response.json()
-        b64_image = data["result"]["image"]
-        image_bytes = base64.b64decode(b64_image)
+        image_bytes = base64.b64decode(data["result"]["image"])
         return image_bytes, None
     except Exception as e:
         return None, f"Unexpected response format: {response.text[:300]}"
@@ -117,6 +112,7 @@ def get_relevant_context(query, top_k=3):
         return ""
     return "\n\nRelevant excerpts from the uploaded document:\n" + "\n---\n".join(relevant)
 
+# --- Sidebar ---
 with st.sidebar:
     st.header("Settings")
     persona_choice = st.selectbox("Choose a persona", list(PERSONAS.keys()))
@@ -146,8 +142,7 @@ with st.sidebar:
     save_title = st.text_input("Chat title")
     if st.button("Save chat") and save_title and st.session_state.messages:
         db.table("chats").insert({
-            "title": save_title,
-            "persona": system_prompt,
+            "title": save_title, "persona": system_prompt,
             "messages": st.session_state.messages
         }).execute()
         st.success("Saved!")
@@ -169,20 +164,60 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.current_artifact = None
 
-chat_col, artifact_col = st.columns([1, 1])
+# --- Full-width toggle: 2 columns only if an artifact is showing ---
+show_artifact_panel = st.session_state.current_artifact and st.session_state.artifact_visible
+
+if show_artifact_panel:
+    chat_col, artifact_col = st.columns([1, 1])
+else:
+    chat_col = st.container()
+    artifact_col = None
 
 with chat_col:
     st.subheader("Chat")
+
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
-            st.write(msg["content"])
+            if isinstance(msg["content"], list):
+                for part in msg["content"]:
+                    if part["type"] == "text":
+                        st.write(part["text"])
+                    elif part["type"] == "image_url":
+                        st.image(part["image_url"]["url"])
+            else:
+                st.write(msg["content"])
+
+    with st.expander("📎 Attach an image (optional)"):
+        attached_image = st.file_uploader("Image to send with your next message", type=["png", "jpg", "jpeg"], key="img_attach")
+        if attached_image:
+            st.image(attached_image, width=150)
+            st.session_state.pending_image = attached_image
 
     user_input = st.chat_input("Say something...")
 
     if user_input:
-        st.session_state.messages.append({"role": "user", "content": user_input})
+        if st.session_state.pending_image:
+            img_bytes = st.session_state.pending_image.getvalue()
+            b64 = base64.b64encode(img_bytes).decode("utf-8")
+            mime = st.session_state.pending_image.type
+            user_content = [
+                {"type": "text", "text": user_input},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+            ]
+            st.session_state.pending_image = None
+        else:
+            user_content = user_input
+
+        st.session_state.messages.append({"role": "user", "content": user_content})
         with st.chat_message("user"):
-            st.write(user_input)
+            if isinstance(user_content, list):
+                for part in user_content:
+                    if part["type"] == "text":
+                        st.write(part["text"])
+                    elif part["type"] == "image_url":
+                        st.image(part["image_url"]["url"])
+            else:
+                st.write(user_content)
 
         doc_context = get_relevant_context(user_input)
         full_system_prompt = system_prompt + "\n\n" + ARTIFACT_INSTRUCTIONS + doc_context
@@ -190,7 +225,7 @@ with chat_col:
 
         with st.chat_message("assistant"):
             stream = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=MODEL_NAME,
                 messages=api_messages,
                 stream=True
             )
@@ -210,10 +245,9 @@ with chat_col:
 
         st.rerun()
 
-with artifact_col:
-    art = st.session_state.current_artifact
-
-    if art and st.session_state.artifact_visible:
+if show_artifact_panel:
+    with artifact_col:
+        art = st.session_state.current_artifact
         header_col, close_col = st.columns([5, 1])
         with header_col:
             st.subheader("Artifact Preview")
@@ -226,7 +260,7 @@ with artifact_col:
 
         if art["type"] == "image":
             with st.spinner("Generating image..."):
-               image_bytes, error = generate_image_cloudflare(art["code"])
+                image_bytes, error = generate_image_cloudflare(art["code"])
             if image_bytes:
                 st.image(image_bytes, caption=art["title"], use_container_width=True)
             else:
@@ -239,13 +273,8 @@ with artifact_col:
             with tab2:
                 st.code(art["code"], language="html")
 
-    elif art and not st.session_state.artifact_visible:
-        st.subheader("Artifact Preview")
-        st.info(f"Preview closed: **{art['title']}**")
-        if st.button("Reopen preview"):
-            st.session_state.artifact_visible = True
-            st.rerun()
-
-    else:
-        st.subheader("Artifact Preview")
-        st.info("Ask the assistant to build something visual, and it'll show up here.")
+elif st.session_state.current_artifact and not st.session_state.artifact_visible:
+    st.info(f"Preview closed: **{st.session_state.current_artifact['title']}**")
+    if st.button("Reopen preview"):
+        st.session_state.artifact_visible = True
+        st.rerun()
