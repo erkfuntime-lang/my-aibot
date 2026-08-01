@@ -1,5 +1,6 @@
 import streamlit as st
 import re
+import urllib.parse
 import numpy as np
 from groq import Groq
 from supabase import create_client
@@ -19,7 +20,13 @@ When the user asks you to build something visual or interactive (a webpage, a ga
 ...complete, self-contained HTML/CSS/JS code here...
 </artifact>
 
-Only use this tag when producing something meant to be viewed/run.
+When the user asks you to generate, draw, or create an IMAGE or picture, respond with a detailed visual description wrapped EXACTLY like this instead:
+
+<artifact type="image" title="Short title here">
+a detailed, vivid description of the image to generate, written for an image AI
+</artifact>
+
+Only use these tags when producing something meant to be viewed/run. Use "image" only for actual picture requests, not diagrams made of code.
 """
 
 PERSONAS = {
@@ -30,12 +37,11 @@ PERSONAS = {
     "Custom": ""
 }
 
-# --- Session state setup ---
 for key, default in [
     ("messages", []), ("current_artifact", None),
     ("doc_chunks", None), ("doc_vectorizer", None),
     ("doc_matrix", None), ("doc_name", None),
-    ("artifact_visible", True) 
+    ("artifact_visible", True)
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -47,6 +53,10 @@ def extract_artifact(text):
     art_type, title, code = match.groups()
     clean_text = text[:match.start()] + text[match.end():]
     return clean_text.strip(), {"type": art_type, "title": title, "code": code.strip()}
+
+def pollinations_url(prompt, width=1024, height=1024):
+    encoded = urllib.parse.quote(prompt)
+    return f"https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}&nologo=true"
 
 def chunk_text(text, chunk_size=800, overlap=100):
     chunks = []
@@ -62,11 +72,9 @@ def process_uploaded_file(file):
         text = "\n".join(page.extract_text() or "" for page in reader.pages)
     else:
         text = file.read().decode("utf-8", errors="ignore")
-
     chunks = chunk_text(text)
     vectorizer = TfidfVectorizer(stop_words="english")
     matrix = vectorizer.fit_transform(chunks)
-
     st.session_state.doc_chunks = chunks
     st.session_state.doc_vectorizer = vectorizer
     st.session_state.doc_matrix = matrix
@@ -83,7 +91,6 @@ def get_relevant_context(query, top_k=3):
         return ""
     return "\n\nRelevant excerpts from the uploaded document:\n" + "\n---\n".join(relevant)
 
-# --- Sidebar ---
 with st.sidebar:
     st.header("Settings")
     persona_choice = st.selectbox("Choose a persona", list(PERSONAS.keys()))
@@ -136,7 +143,6 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.current_artifact = None
 
-# --- Main layout ---
 chat_col, artifact_col = st.columns([1, 1])
 
 with chat_col:
@@ -154,7 +160,6 @@ with chat_col:
 
         doc_context = get_relevant_context(user_input)
         full_system_prompt = system_prompt + "\n\n" + ARTIFACT_INSTRUCTIONS + doc_context
-
         api_messages = [{"role": "system", "content": full_system_prompt}] + st.session_state.messages
 
         with st.chat_message("assistant"):
@@ -163,13 +168,11 @@ with chat_col:
                 messages=api_messages,
                 stream=True
             )
-
             def text_generator():
                 for chunk in stream:
                     delta = chunk.choices[0].delta.content
                     if delta:
                         yield delta
-
             full_reply = st.write_stream(text_generator)
 
         clean_reply, artifact = extract_artifact(full_reply)
@@ -190,16 +193,21 @@ with artifact_col:
             st.subheader("Artifact Preview")
             st.caption(art["title"])
         with close_col:
-            st.write("")  # small vertical spacer to align button
+            st.write("")
             if st.button("✕", help="Close preview"):
                 st.session_state.artifact_visible = False
                 st.rerun()
 
-        tab1, tab2 = st.tabs(["Preview", "Code"])
-        with tab1:
-            st.components.v1.html(art["code"], height=500, scrolling=True)
-        with tab2:
-            st.code(art["code"], language="html")
+        if art["type"] == "image":
+            url = pollinations_url(art["code"])
+            st.image(url, caption=art["title"], use_container_width=True)
+            st.caption(f"Prompt used: {art['code']}")
+        else:
+            tab1, tab2 = st.tabs(["Preview", "Code"])
+            with tab1:
+                st.components.v1.html(art["code"], height=500, scrolling=True)
+            with tab2:
+                st.code(art["code"], language="html")
 
     elif art and not st.session_state.artifact_visible:
         st.subheader("Artifact Preview")
