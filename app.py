@@ -57,7 +57,7 @@ def extract_artifact(text):
 def pollinations_url(prompt, width=1024, height=1024):
     encoded = urllib.parse.quote(prompt)
     key = st.secrets.get("POLLINATIONS_KEY", "")
-    url = f"https://gen.pollinations.ai/image/{encoded}?width={width}&height={height}"
+    url = f"https://gen.pollinations.ai/image/{encoded}?width={width}&height={height}&model=flux"
     if key:
         url += f"&key={key}"
     return url
@@ -204,6 +204,7 @@ with artifact_col:
 
         if art["type"] == "image":
             url = pollinations_url(art["code"])
+            st.code(url, language=None)   
             st.image(url, caption=art["title"], use_container_width=True)
             st.caption(f"Prompt used: {art['code']}")
         else:
