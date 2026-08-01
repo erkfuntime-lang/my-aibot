@@ -216,7 +216,7 @@ with artifact_col:
                 st.session_state.artifact_visible = False
                 st.rerun()
 
-      if art["type"] == "image":
+        if art["type"] == "image":
             with st.spinner("Generating image..."):
                image_bytes, error = generate_image_cloudflare(art["code"])
             if image_bytes:
