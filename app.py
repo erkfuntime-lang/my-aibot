@@ -228,6 +228,7 @@ with chat_col:
                 model=MODEL_NAME,
                 messages=api_messages,
                 stream=True
+                reasoning_format="hidden"
             )
             def text_generator():
                 for chunk in stream:
