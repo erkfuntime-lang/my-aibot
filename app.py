@@ -116,6 +116,29 @@ def edit_image_cloudflare(image_bytes, prompt, strength=0.7):
         return None, f"Unexpected response: {response.text[:300]}"
 
 
+def fetch_image_from_url(url):
+    try:
+        response = requests.get(url, timeout=20)
+        if response.status_code == 200:
+            return response.content, None
+        return None, f"Could not fetch image (status {response.status_code})"
+    except Exception as e:
+        return None, f"Fetch failed: {e}"
+
+
+def wikipedia_summary(topic):
+    try:
+        url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{requests.utils.quote(topic)}"
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("type") != "disambiguation":
+                return data.get("extract", "")
+    except Exception:
+        pass
+    return ""
+
+
 def chunk_text(text, chunk_size=800, overlap=100):
     chunks = []
     start = 0
@@ -273,10 +296,22 @@ with chat_col:
                 st.write(msg["content"])
 
     with st.expander("📎 Attach an image (optional)"):
-        attached_image = st.file_uploader("Image to send with your next message", type=["png", "jpg", "jpeg"], key="img_attach")
-        if attached_image:
-            st.image(attached_image, width=150)
-            st.session_state.pending_image = attached_image
+        tab_upload, tab_url = st.tabs(["Upload", "From URL"])
+        with tab_upload:
+            attached_image = st.file_uploader("Image file", type=["png", "jpg", "jpeg"], key="img_attach")
+            if attached_image:
+                st.image(attached_image, width=150)
+                st.session_state.pending_image = attached_image
+        with tab_url:
+            image_url = st.text_input("Paste an image URL", key="img_url_input")
+            if image_url and st.button("Fetch image"):
+                img_bytes, error = fetch_image_from_url(image_url)
+                if img_bytes:
+                    st.session_state.last_attached_image_bytes = img_bytes
+                    st.image(img_bytes, width=150)
+                    st.success("Image loaded — you can now ask to edit it")
+                else:
+                    st.error(error)
 
     user_input = st.chat_input("Say something...")
 
@@ -350,15 +385,23 @@ if show_artifact_panel:
 
         if art["type"] == "image":
             if "image_bytes" not in art:
+                wiki_facts = wikipedia_summary(art["title"])
+                final_prompt = art["code"]
+                if wiki_facts:
+                    final_prompt += f"\n\nFactual reference for accuracy: {wiki_facts[:400]}"
+
                 with st.spinner("Generating image..."):
-                    image_bytes, error = generate_image_cloudflare(art["code"])
+                    image_bytes, error = generate_image_cloudflare(final_prompt)
                 art["image_bytes"] = image_bytes
                 art["error"] = error
+                art["used_wiki_facts"] = bool(wiki_facts)
                 st.session_state.current_artifact = art
 
             if art.get("image_bytes"):
                 st.image(art["image_bytes"], caption=art["title"], use_container_width=True)
                 st.download_button("Download image", art["image_bytes"], file_name=f"{art['title']}.png", mime="image/png")
+                if art.get("used_wiki_facts"):
+                    st.caption("ℹ️ Grounded with a Wikipedia summary for accuracy")
             else:
                 st.error(f"Image generation failed: {art.get('error')}")
             st.caption(f"Prompt used: {art['code']}")
