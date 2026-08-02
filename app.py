@@ -35,6 +35,12 @@ When the user has attached an image AND asks you to edit, modify, transform, or 
 a short prompt describing the transformation to apply, written for an image editing AI (e.g. "add falling snow, winter atmosphere")
 </artifact>
 
+When the user asks you to run, execute, or test a piece of Python code, or wants to see the actual output of a script (not just read the code), respond with:
+
+<artifact type="python" title="Short title here">
+complete Python code to execute
+</artifact>
+
 If the user attaches an image and just asks you to describe or answer questions about it, respond normally in plain text with no artifact tag.
 """
 
@@ -139,6 +145,27 @@ def wikipedia_summary(topic):
     return ""
 
 
+def run_python_judge0(code):
+    url = "https://ce.judge0.com/submissions?wait=true"
+    payload = {
+        "source_code": code,
+        "language_id": 109  # Python 3 — verify against GET /languages if this ever errors
+    }
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+    except Exception as e:
+        return None, None, f"Request failed: {e}"
+
+    if response.status_code not in (200, 201):
+        return None, None, f"Status {response.status_code}: {response.text[:300]}"
+
+    data = response.json()
+    stdout = data.get("stdout") or ""
+    stderr = data.get("stderr") or data.get("compile_output") or ""
+    status = data.get("status", {}).get("description", "Unknown")
+    return stdout, stderr, status
+
+
 def chunk_text(text, chunk_size=800, overlap=100):
     chunks = []
     start = 0
@@ -239,10 +266,10 @@ with st.sidebar:
     if st.button("Save chat") and save_title and st.session_state.messages:
         artifact_to_save = None
         if st.session_state.current_artifact:
-            # strip out raw image bytes before saving to Supabase (jsonb can't hold binary)
+            # strip out raw image bytes / run output before saving to Supabase (jsonb can't hold binary, and we can regenerate anyway)
             artifact_to_save = {
                 k: v for k, v in st.session_state.current_artifact.items()
-                if k not in ("image_bytes", "error")
+                if k not in ("image_bytes", "error", "run_output", "run_error", "run_status")
             }
         db.table("chats").insert({
             "title": save_title,
@@ -426,6 +453,28 @@ if show_artifact_panel:
             else:
                 st.error(art.get("error"))
             st.caption(f"Edit applied: {art['code']}")
+
+        elif art["type"] == "python":
+            if "run_output" not in art:
+                with st.spinner("Running code..."):
+                    stdout, stderr, status = run_python_judge0(art["code"])
+                art["run_output"] = stdout
+                art["run_error"] = stderr
+                art["run_status"] = status
+                st.session_state.current_artifact = art
+
+            st.caption(f"Status: {art['run_status']}")
+            tab1, tab2 = st.tabs(["Output", "Code"])
+            with tab1:
+                if art["run_output"]:
+                    st.code(art["run_output"], language=None)
+                if art["run_error"]:
+                    st.error(art["run_error"])
+                if not art["run_output"] and not art["run_error"]:
+                    st.info("No output produced.")
+            with tab2:
+                st.code(art["code"], language="python")
+            st.download_button("Download code", art["code"], file_name=f"{art['title']}.py", mime="text/plain")
 
         elif art["type"] == "html":
             tab1, tab2 = st.tabs(["Preview", "Code"])
