@@ -145,25 +145,103 @@ def wikipedia_summary(topic):
     return ""
 
 
-def run_python_judge0(code):
-    url = "https://ce.judge0.com/submissions?wait=true"
-    payload = {
-        "source_code": code,
-        "language_id": 109  # Python 3 — verify against GET /languages if this ever errors
-    }
-    try:
-        response = requests.post(url, json=payload, timeout=30)
-    except Exception as e:
-        return None, None, f"Request failed: {e}"
+def render_pyodide_sandbox(height=550):
+    """A persistent, manual Python REPL running entirely in the browser via Pyodide.
+    Because this HTML string is static across Streamlit reruns, the embedded iframe
+    is not reloaded on every interaction, so variables persist between 'Run' clicks
+    until the user clicks Reset."""
+    html_code = """
+    <div style="font-family: monospace;">
+      <div id="status" style="margin-bottom: 8px; color: #888;">Loading Python runtime...</div>
+      <textarea id="code-input" style="width: 100%; height: 200px; font-family: monospace; font-size: 14px; padding: 8px; box-sizing: border-box;" placeholder="Type Python code here..."></textarea>
+      <br><br>
+      <button id="run-btn" disabled style="padding: 6px 16px; cursor: pointer;">Run</button>
+      <button id="reset-btn" style="padding: 6px 16px; cursor: pointer;">Reset session</button>
+      <pre id="output" style="background: #1e1e1e; color: #d4d4d4; padding: 12px; margin-top: 12px; min-height: 100px; white-space: pre-wrap; border-radius: 4px;"></pre>
+    </div>
 
-    if response.status_code not in (200, 201):
-        return None, None, f"Status {response.status_code}: {response.text[:300]}"
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+    <script>
+      let pyodideInstance = null;
 
-    data = response.json()
-    stdout = data.get("stdout") or ""
-    stderr = data.get("stderr") or data.get("compile_output") or ""
-    status = data.get("status", {}).get("description", "Unknown")
-    return stdout, stderr, status
+      async function setup() {
+        document.getElementById("run-btn").disabled = true;
+        document.getElementById("status").innerText = "Loading Python runtime...";
+        pyodideInstance = await loadPyodide();
+        document.getElementById("status").innerText = "Ready. Variables persist between runs until you click Reset.";
+        document.getElementById("run-btn").disabled = false;
+      }
+
+      async function runCode() {
+        const code = document.getElementById("code-input").value;
+        const outputEl = document.getElementById("output");
+        outputEl.innerText = "Running...";
+        try {
+          pyodideInstance.runPython(`
+import sys, io
+sys.stdout = io.StringIO()
+sys.stderr = sys.stdout
+          `);
+          let result = await pyodideInstance.runPythonAsync(code);
+          let captured = pyodideInstance.runPython("sys.stdout.getvalue()");
+          let display = captured || "";
+          if (result !== undefined) {
+            display += "\\n=> " + result;
+          }
+          outputEl.innerText = display || "(no output)";
+        } catch (err) {
+          outputEl.innerText = "Error:\\n" + err;
+        }
+      }
+
+      document.getElementById("run-btn").addEventListener("click", runCode);
+      document.getElementById("reset-btn").addEventListener("click", () => {
+        setup();
+        document.getElementById("output").innerText = "";
+        document.getElementById("code-input").value = "";
+      });
+
+      setup();
+    </script>
+    """
+    st.components.v1.html(html_code, height=height, scrolling=True)
+
+
+def render_python_artifact_pyodide(code, height=400):
+    """One-shot Pyodide execution for an AI-generated python artifact.
+    Each artifact gets a fresh Python runtime (no shared state between artifacts),
+    which is fine since the model writes each script as a self-contained unit."""
+    escaped_code = code.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
+    html_code = f"""
+    <div style="font-family: monospace;">
+      <div id="status">Running...</div>
+      <pre id="output" style="background: #1e1e1e; color: #d4d4d4; padding: 12px; margin-top: 8px; min-height: 80px; white-space: pre-wrap; border-radius: 4px;"></pre>
+    </div>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+    <script>
+      async function main() {{
+        let pyodide = await loadPyodide();
+        const outputEl = document.getElementById("output");
+        const statusEl = document.getElementById("status");
+        try {{
+          pyodide.runPython(`
+import sys, io
+sys.stdout = io.StringIO()
+sys.stderr = sys.stdout
+          `);
+          await pyodide.runPythonAsync(`{escaped_code}`);
+          let captured = pyodide.runPython("sys.stdout.getvalue()");
+          outputEl.innerText = captured || "(no output)";
+          statusEl.innerText = "Done.";
+        }} catch (err) {{
+          outputEl.innerText = "Error:\\n" + err;
+          statusEl.innerText = "Failed.";
+        }}
+      }}
+      main();
+    </script>
+    """
+    st.components.v1.html(html_code, height=height, scrolling=True)
 
 
 def chunk_text(text, chunk_size=800, overlap=100):
@@ -235,6 +313,10 @@ with st.sidebar:
     reasoning_on = st.toggle("Deep reasoning (slower, better for math/code)", value=False)
 
     st.divider()
+    with st.expander("🧪 Python Sandbox (persistent)"):
+        render_pyodide_sandbox()
+
+    st.divider()
     st.subheader("Upload a document")
     uploaded_file = st.file_uploader("PDF or text file", type=["pdf", "txt"])
     if uploaded_file and uploaded_file.name != st.session_state.doc_name:
@@ -266,7 +348,7 @@ with st.sidebar:
     if st.button("Save chat") and save_title and st.session_state.messages:
         artifact_to_save = None
         if st.session_state.current_artifact:
-            # strip out raw image bytes / run output before saving to Supabase (jsonb can't hold binary, and we can regenerate anyway)
+            # strip out raw image bytes / non-serializable fields before saving to Supabase
             artifact_to_save = {
                 k: v for k, v in st.session_state.current_artifact.items()
                 if k not in ("image_bytes", "error", "run_output", "run_error", "run_status")
@@ -455,23 +537,9 @@ if show_artifact_panel:
             st.caption(f"Edit applied: {art['code']}")
 
         elif art["type"] == "python":
-            if "run_output" not in art:
-                with st.spinner("Running code..."):
-                    stdout, stderr, status = run_python_judge0(art["code"])
-                art["run_output"] = stdout
-                art["run_error"] = stderr
-                art["run_status"] = status
-                st.session_state.current_artifact = art
-
-            st.caption(f"Status: {art['run_status']}")
             tab1, tab2 = st.tabs(["Output", "Code"])
             with tab1:
-                if art["run_output"]:
-                    st.code(art["run_output"], language=None)
-                if art["run_error"]:
-                    st.error(art["run_error"])
-                if not art["run_output"] and not art["run_error"]:
-                    st.info("No output produced.")
+                render_python_artifact_pyodide(art["code"])
             with tab2:
                 st.code(art["code"], language="python")
             st.download_button("Download code", art["code"], file_name=f"{art['title']}.py", mime="text/plain")
