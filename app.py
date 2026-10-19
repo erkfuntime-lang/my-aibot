@@ -1,4 +1,4 @@
-vimport streamlit as st
+import streamlit as st
 import re
 import base64
 import requests
