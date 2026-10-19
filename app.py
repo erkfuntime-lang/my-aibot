@@ -1,4 +1,4 @@
-import streamlit as st
+vimport streamlit as st
 import re
 import base64
 import requests
@@ -204,7 +204,7 @@ sys.stderr = sys.stdout
       setup();
     </script>
     """
-    st.components.v1.html(html_code, height=height, scrolling=True)
+    st.iframe(html_code, height=height, scrolling=True)
 
 
 def render_python_artifact_pyodide(code, height=400):
@@ -241,7 +241,7 @@ sys.stderr = sys.stdout
       main();
     </script>
     """
-    st.components.v1.html(html_code, height=height, scrolling=True)
+    st.iframe(html_code, height=height, scrolling=True)
 
 
 def chunk_text(text, chunk_size=800, overlap=100):
@@ -547,7 +547,7 @@ if show_artifact_panel:
         elif art["type"] == "html":
             tab1, tab2 = st.tabs(["Preview", "Code"])
             with tab1:
-                st.components.v1.html(art["code"], height=500, scrolling=True)
+                st.iframe(art["code"], height=500, scrolling=True)
             with tab2:
                 edited_code = st.text_area("Edit the code", value=art["code"], height=400, key=f"editor_{id(art)}")
                 if st.button("Update preview"):
